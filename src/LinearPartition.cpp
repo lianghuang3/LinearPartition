@@ -69,8 +69,7 @@ pf_type BeamCKYParser::beam_prune(std::unordered_map<int, State> &beamstep) {
     return threshold;
 }
 
-void BeamCKYParser::prepare(unsigned len) {
-    seq_length = len;
+void BeamCKYParser::prepare() {
 
     nucs = new int[seq_length];
     bestC = new State[seq_length];
@@ -81,32 +80,11 @@ void BeamCKYParser::prepare(unsigned len) {
     bestMulti = new unordered_map<int, State>[seq_length];
     
     scores.reserve(seq_length);
-}
-
-void BeamCKYParser::postprocess() {
-
-    delete[] bestC;  
-    delete[] bestH;  
-    delete[] bestP;  
-    delete[] bestM;  
-    delete[] bestM2;  
-    delete[] bestMulti;  
-
-    delete[] nucs;  
-}
-
-void BeamCKYParser::parse(string& seq) {
-      
-    struct timeval parse_starttime, parse_endtime;
-
-    gettimeofday(&parse_starttime, NULL);
-
-    prepare(static_cast<unsigned>(seq.length()));
 
     for (int i = 0; i < seq_length; ++i)
         nucs[i] = GET_ACGU_NUM(seq[i]);
 
-    vector<int> next_pair[NOTON];
+    next_pair = new vector<int>[NOTON];
     {
         for (int nuci = 0; nuci < NOTON; ++nuci) {
             // next_pair
@@ -118,6 +96,33 @@ void BeamCKYParser::parse(string& seq) {
             }
         }
     }
+    
+    
+}
+
+void BeamCKYParser::postprocess() {
+
+    delete[] bestC;  
+    delete[] bestH;  
+    delete[] bestP;  
+    delete[] bestM;  
+    delete[] bestM2;  
+    delete[] bestMulti;  
+
+    delete[] nucs;
+    delete[] next_pair;
+}
+
+void BeamCKYParser::parse(string& seq) {
+      
+    struct timeval parse_starttime, parse_endtime;
+
+    gettimeofday(&parse_starttime, NULL);
+
+    this -> seq = seq;
+    seq_length = static_cast<unsigned>(seq.length());
+
+    prepare();
 
 #ifdef SPECIAL_HP
 #ifdef lpv
@@ -452,12 +457,12 @@ void BeamCKYParser::parse(string& seq) {
     fflush(stdout);
 
     // lhuang
-    if(pf_only && !forest_file.empty()) dump_forest(seq, true); // inside-only forest
+    if(pf_only && !forest_file.empty()) dump_forest(true); // inside-only forest
 
     if(!pf_only){
-        outside(next_pair);
+        outside();
     	if (!forest_file.empty())
-    	  dump_forest(seq, false); // inside-outside forest
+    	  dump_forest(false); // inside-outside forest
             cal_PairProb(viterbi);
 
         if (mea_) PairProb_MEA(seq);
@@ -478,7 +483,7 @@ void BeamCKYParser::print_states(FILE *fptr, unordered_map<int, State>& states, 
     }
 }
 
-void BeamCKYParser::dump_forest(string seq, bool inside_only) {  
+void BeamCKYParser::dump_forest(bool inside_only) {  
     printf("Dumping (%s) Forest to %s...\n", (inside_only ? "Inside-Only" : "Inside-Outside"), forest_file.c_str());
     FILE *fptr = fopen(forest_file.c_str(), "w");  // lhuang: should be fout >>
     fprintf(fptr, "%s\n", seq.c_str());
@@ -505,7 +510,7 @@ BeamCKYParser::BeamCKYParser(int beam_size,
                              string bppfileindex,
                              bool pfonly,
                              float bppcutoff,
-			                 string forestfile,
+			                    string forestfile,
                              bool mea,
                              float MEA_gamma,
                              string MEA_file_index,

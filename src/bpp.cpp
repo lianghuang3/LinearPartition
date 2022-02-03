@@ -279,7 +279,7 @@ void BeamCKYParser::PairProb_MEA(string & seq) {
 }
 
 
-void BeamCKYParser::outside(vector<int> next_pair[]){
+void BeamCKYParser::outside() {
       
     struct timeval bpp_starttime, bpp_endtime;
     gettimeofday(&bpp_starttime, NULL);
@@ -521,3 +521,5 @@ void BeamCKYParser::outside(vector<int> next_pair[]){
     return;
 }
 
+void BeamCKYParser::lazyoutside() {
+}
