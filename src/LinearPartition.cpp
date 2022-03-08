@@ -72,19 +72,28 @@ pf_type BeamCKYParser::beam_prune(std::unordered_map<int, State> &beamstep) {
 void BeamCKYParser::prepare() {
 
     nucs = new int[seq_length];
-    bestC = new State[seq_length];
+    bestC.reserve(seq_length+1); // lhuang: -1 // = new State[seq_length];
     bestH = new unordered_map<int, State>[seq_length];
     bestP = new unordered_map<int, State>[seq_length];
     bestM = new unordered_map<int, State>[seq_length];
     bestM2 = new unordered_map<int, State>[seq_length];
     bestMulti = new unordered_map<int, State>[seq_length];
+
+    best_states = new mypointer[5];
+    best_states[TYPE_M] = bestM;
+    best_states[TYPE_M2] = bestM2;
+    best_states[TYPE_P] = bestP;
+    best_states[TYPE_MULTI] = bestMulti;
+
+    sortedP = new vector<int>[seq_length]; // for M2 = M + P backwards
     
     scores.reserve(seq_length);
 
     for (int i = 0; i < seq_length; ++i)
         nucs[i] = GET_ACGU_NUM(seq[i]);
 
-    next_pair = new vector<int>[NOTON];
+    next_pair = new vector<int>[NOTON]; // lhuang: why not 2D?
+    prev_pair = new vector<int>[NOTON];
     {
         for (int nuci = 0; nuci < NOTON; ++nuci) {
             // next_pair
@@ -94,23 +103,35 @@ void BeamCKYParser::prepare() {
                 next_pair[nuci][j] = next;
                 if (_allowed_pairs[nuci][nucs[j]]) next = j;
             }
+
+            prev_pair[nuci].resize(seq_length, -1);
+
+            // N.B. lhuang: added from linearsampling
+            int prev = -1; 
+            for (int j = 0; j < seq_length; ++j) { // going forward
+                prev_pair[nuci][j] = prev;
+                if (_allowed_pairs[nuci][nucs[j]]) prev = j;
+            }
         }
     }
-    
     
 }
 
 void BeamCKYParser::postprocess() {
 
-    delete[] bestC;  
+  //    delete[] bestC;  
     delete[] bestH;  
     delete[] bestP;  
     delete[] bestM;  
     delete[] bestM2;  
-    delete[] bestMulti;  
+    delete[] bestMulti;
+    delete[] best_states;
 
     delete[] nucs;
     delete[] next_pair;
+    delete[] prev_pair;
+
+    delete[] sortedP;
 }
 
 void BeamCKYParser::parse(string& seq) {
@@ -453,6 +474,7 @@ void BeamCKYParser::parse(string& seq) {
 #endif
 
     if(is_verbose) fprintf(stderr,"Partition Function Calculation Time: %.2f seconds.\n", parse_elapsed_time);
+    inside_time = parse_elapsed_time;
 
     fflush(stdout);
 
@@ -460,6 +482,9 @@ void BeamCKYParser::parse(string& seq) {
     if(pf_only && !forest_file.empty()) dump_forest(true); // inside-only forest
 
     if(!pf_only){
+      if (is_lazy)
+        lazyoutside();
+      else
         outside();
     	if (!forest_file.empty())
     	  dump_forest(false); // inside-outside forest
@@ -492,7 +517,7 @@ void BeamCKYParser::dump_forest(bool inside_only) {
         if (inside_only) fprintf(fptr, "E %d %.5lf\n", j+1, bestC[j].alpha);
         else fprintf(fptr, "E %d %.5lf %.5lf\n", j+1, bestC[j].alpha, bestC[j].beta);
     }
-    double threshold = bestC[n-1].alpha - 9.91152; // lhuang -9.xxx or ?
+    double threshold = bestC[n-1].alpha - deviation_threshold; //9.91152; // lhuang -9.xxx or ?
     for (j = 0; j < n; j++) 
         print_states(fptr, bestP[j], j, "P", inside_only, threshold);
     for (j = 0; j < n; j++) 
@@ -519,7 +544,9 @@ BeamCKYParser::BeamCKYParser(int beam_size,
                              float ThreshKnot_threshold,
                              string ThreshKnot_file_index,
                              string shape_file_path,
-                             bool fasta)
+                             bool fasta,
+                             bool lazy,
+                             float deviation)
     : beam(beam_size), 
       no_sharp_turn(nosharpturn), 
       is_verbose(verbose),
@@ -535,7 +562,9 @@ BeamCKYParser::BeamCKYParser(int beam_size,
       threshknot_(ThreshKnot),
       threshknot_threshold(ThreshKnot_threshold),
       threshknot_file_index(ThreshKnot_file_index),
-      is_fasta(fasta){
+      is_fasta(fasta),
+      is_lazy(lazy),
+      deviation_threshold (deviation) {
 #ifdef lpv
         initialize();
 #else
@@ -606,7 +635,9 @@ int main(int argc, char** argv){
     float ThreshKnot_threshold = 0.3;
     bool ThreshKnot = false;
     string ThresKnot_prefix;
-    bool fasta = false; 
+    bool fasta = false;
+    bool lazy = false;
+    float deviation;
 
     // SHAPE
     string shape_file_path = "";
@@ -629,6 +660,8 @@ int main(int argc, char** argv){
         MEA_bpseq = atoi(argv[15]) == 1;
         shape_file_path = argv[16];
         fasta = atoi(argv[17]) == 1;
+        lazy = atoi(argv[18]) == 1;
+        deviation = atof(argv[19]);
     }
 
     if (is_verbose) printf("beam size: %d\n", beamsize);
@@ -675,18 +708,19 @@ int main(int argc, char** argv){
     }
 
     for(int i = 0; i < rna_seq_list.size(); i++){
-        if (rna_name_list.size() > i)
+      if (rna_name_list.size() > i) // lhuang???
             printf("%s\n", rna_name_list[i].c_str());
         rna_seq = rna_seq_list[i];
 
         printf("%s\n", rna_seq.c_str());
+
         if (!bpp_file.empty()) {
-            FILE *fptr = fopen(bpp_file.c_str(), "a"); 
+	  FILE *fptr = fopen(bpp_file.c_str(), "w"); // lhuang: replace, not append
             if (fptr == NULL) { 
                 printf("Could not open file!\n"); 
                 return 0; 
             }
-            if (rna_name_list.size() > i)
+            if (rna_name_list.size() > i) // lhuang???
                 fprintf(fptr, "%s\n", rna_name_list[i].c_str());
             fclose(fptr); 
         }
@@ -705,7 +739,7 @@ int main(int argc, char** argv){
         replace(rna_seq.begin(), rna_seq.end(), 'T', 'U');
 
         // lhuang: moved inside loop, fixing an obscure but crucial bug in initialization
-        BeamCKYParser parser(beamsize, !sharpturn, is_verbose, bpp_file, bpp_file_index, pf_only, bpp_cutoff, forest_file, mea, MEA_gamma, MEA_file_index, MEA_bpseq, ThreshKnot, ThreshKnot_threshold, ThreshKnot_file_index, shape_file_path);
+        BeamCKYParser parser(beamsize, !sharpturn, is_verbose, bpp_file, bpp_file_index, pf_only, bpp_cutoff, forest_file, mea, MEA_gamma, MEA_file_index, MEA_bpseq, ThreshKnot, ThreshKnot_threshold, ThreshKnot_file_index, shape_file_path, fasta, lazy, deviation);
 
         parser.parse(rna_seq);
     }

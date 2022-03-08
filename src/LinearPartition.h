@@ -78,7 +78,25 @@ struct State {
   
 };
 
+// unified hyperedge
+struct HEdge {
+  State * left=NULL, * right=NULL; // right=null <=> Edge
+  pf_type out;
+  HEdge(State * l=NULL, State * r=NULL, pf_type o=VALUE_MIN) : left(l), right(r), out(o) {}; // default constructor needed
+};
 
+enum Type { // reverse topological order
+  TYPE_C = 0,
+  TYPE_M = 1 ,
+  TYPE_M2 = 2,
+  TYPE_P = 3,
+  TYPE_MULTI = 4,
+  TYPE_MAX
+};
+
+string type2str[5] = {"C", "M", "M2", "P", "MULTI"};
+
+typedef unordered_map<int, State> *mypointer;
 class BeamCKYParser {
 public:
     int beam;
@@ -97,6 +115,7 @@ public:
     float threshknot_threshold;
     string threshknot_file_index;
     bool is_fasta;
+    bool is_lazy = false;
 
     // SHAPE
     bool use_shape = false;
@@ -111,7 +130,7 @@ public:
                   string bppfileindex="",
                   bool pf_only=false,
                   float bpp_cutoff=0.0,
-		          string forestfile="",
+      	         string forestfile="",
                   bool mea_=false,
                   float gamma=3.0,
                   string mea_file_index="",
@@ -120,7 +139,9 @@ public:
                   float threshknot_threshold=0.3,
                   string threshknot_file_index="",
                   string shape_file_path="",
-                  bool is_fasta=false);
+                  bool is_fasta=false,
+                  bool is_lazy=false,
+                  float threshold=9.91152);
 
     // DecoderResult parse(string& seq);
     void parse(string& seq);
@@ -132,15 +153,21 @@ private:
     string seq;
 
     unordered_map<int, State> *bestH, *bestP, *bestM2, *bestMulti, *bestM;
+    unordered_map<int, State> bestC; // lhuang: caution: -1
+    unordered_map<int, State> **best_states; // pointing to (bestC), bestM, bestM2, bestP, bestMulti
 
     vector<int> if_tetraloops;
     vector<int> if_hexaloops;
     vector<int> if_triloops;
 
-    State *bestC;
 
     int *nucs;
     vector<int> * next_pair;
+  vector<int> * prev_pair; // N.B.: lhuang: from linearsampling
+
+  vector<int> *sortedP; // sorted by -i for P(i,j); used for M2=M+P backwards
+  float inside_time;
+  float deviation_threshold = 9.91152; // inside + outside > global - ..
 
     void prepare();
     void postprocess();
@@ -169,13 +196,22 @@ private:
     void output_to_file_MEA_threshknot_bpseq(string file_name, const char * type, map<int,int> & pairs, string & seq);
 
     void lazyoutside();
-  //void backward_update(int i, int j, State & state, Type type);
+    void backward_update(int i, int j, State & state, Type type);
 
     // SHAPE
     std::vector<double> SHAPE_data;
 
     std::vector<int> pseudo_energy_stack;
 
+  // for lazyoutside
+  float global_threshold, edge_threshold;
+  int pruned = 0, local_pruned = 0, saved = 0;
+  float best_inside, saved_inside;
+
+  vector <HEdge> saved_hedges;
+  HEdge best_edge; // needs default constructor
+  inline void check_edge(State * left, float out, float edge_extra, State * right);
+  int edge_counts[6] = {0, 0, 0, 0, 0, 0};
 };
 
 #endif //FASTCKY_BEAMCKYPAR_H
